@@ -1,9 +1,15 @@
-import { MongoClient } from "mongodb";
-
-const uri = "mongodb+srv://Manan:CSlab@768@clusterrad.421lxwv.mongodb.net/"; // same as in your Flutter code
-const client = new MongoClient(uri);
-
 export default async function handler(req, res) {
+  // ✅ Allow all origins (CORS)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // ✅ Handle preflight requests
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  // ✅ Only allow POST for data
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Only POST allowed" });
   }
@@ -11,26 +17,17 @@ export default async function handler(req, res) {
   try {
     const { frequency, signalStrength, classification, timestamp } = req.body;
 
-    if (!frequency || !signalStrength || !classification) {
-      return res.status(400).json({ message: "Missing data fields" });
-    }
-
-    await client.connect();
-    const db = client.db("radiationDB");
-    const collection = db.collection("rf_data");
-
-    await collection.insertOne({
+    console.log("📡 Incoming RF data:", {
       frequency,
       signalStrength,
       classification,
-      timestamp: timestamp || new Date().toISOString(),
+      timestamp,
     });
 
-    res.status(200).json({ message: "Data inserted successfully" });
+    // (Optional: store in database here)
+    return res.status(200).json({ message: "Data received successfully" });
   } catch (err) {
-    console.error("Error:", err);
-    res.status(500).json({ message: "Server error", error: err.message });
-  } finally {
-    await client.close();
+    console.error("❌ Server error:", err);
+    return res.status(500).json({ message: "Internal server error" });
   }
 }
