@@ -7,8 +7,15 @@ app.use(cors());
 app.use(express.json());
 
 // 🧠 Replace this with your actual MongoDB Atlas connection string
-const mongoUri = "mongodb+srv://Manan:CSlab@768@clusterrad.421lxwv.mongodb.net/";
-await mongoose.connect(mongoUri);
+const mongoUri = process.env.MONGO_URI;
+
+try {
+  await mongoose.connect(mongoUri);
+  console.log("✅ MongoDB connected successfully");
+} catch (error) {
+  console.error("❌ MongoDB connection error:", error);
+}
+
 
 // Define schema & model
 const rfSchema = new mongoose.Schema({

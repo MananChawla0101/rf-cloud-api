@@ -1,15 +1,9 @@
+// api/saveRF.js
+import { MongoClient } from "mongodb";
+
+const uri = process.env.MONGO_URI; // We'll set this in step 3
+
 export default async function handler(req, res) {
-  // ✅ Allow all origins (CORS)
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  // ✅ Handle preflight requests
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  // ✅ Only allow POST for data
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Only POST allowed" });
   }
@@ -17,17 +11,29 @@ export default async function handler(req, res) {
   try {
     const { frequency, signalStrength, classification, timestamp } = req.body;
 
-    console.log("📡 Incoming RF data:", {
+    if (!frequency || !signalStrength || !classification || !timestamp) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
+
+    // Connect to MongoDB Atlas
+    const client = new MongoClient(uri);
+    await client.connect();
+    const db = client.db("radiationDB");
+    const collection = db.collection("rf_data");
+
+    // Insert new reading
+    await collection.insertOne({
       frequency,
       signalStrength,
       classification,
       timestamp,
     });
 
-    // (Optional: store in database here)
-    return res.status(200).json({ message: "Data received successfully" });
-  } catch (err) {
-    console.error("❌ Server error:", err);
-    return res.status(500).json({ message: "Internal server error" });
+    await client.close();
+
+    return res.status(200).json({ message: "Data saved successfully ✅" });
+  } catch (error) {
+    console.error("❌ API error:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
   }
 }
