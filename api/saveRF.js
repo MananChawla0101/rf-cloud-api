@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Connect to MongoDB Atlas (once)
+// ✅ MongoDB connection reuse
 let isConnected = false;
 async function connectToDB() {
   if (isConnected) return;
@@ -18,7 +18,7 @@ async function connectToDB() {
   }
 }
 
-// Define schema & model
+// ✅ Define schema & model
 const rfSchema = new mongoose.Schema({
   frequency: Number,
   signalStrength: Number,
@@ -26,27 +26,46 @@ const rfSchema = new mongoose.Schema({
   timestamp: Date,
 });
 
-const RFReading = mongoose.models.RFReading || mongoose.model("RFReading", rfSchema);
+const RFReading =
+  mongoose.models.RFReading || mongoose.model("RFReading", rfSchema);
 
-// Main API function (Vercel automatically handles the request)
+// ✅ Main API function
 export default async function handler(req, res) {
+  // ✅ CORS Headers (for Flutter Web + external access)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // ✅ Handle CORS preflight
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   await connectToDB();
 
+  // ✅ Handle POST (save data)
   if (req.method === "POST") {
     try {
       const newReading = new RFReading(req.body);
       await newReading.save();
-      return res.status(200).json({ success: true, message: "Data saved" });
+      return res
+        .status(200)
+        .json({ success: true, message: "✅ Data saved successfully" });
     } catch (err) {
-      return res.status(500).json({ success: false, error: err.message });
+      console.error("❌ Save error:", err.message);
+      return res
+        .status(500)
+        .json({ success: false, error: "Database save failed" });
     }
   }
 
-  // For testing from browser
+  // ✅ Handle GET (status check)
   if (req.method === "GET") {
-    return res.status(200).json({ message: "✅ RF Cloud API is running!" });
+    return res
+      .status(200)
+      .json({ message: "✅ RF Cloud API is running!" });
   }
 
-  // Only POST and GET allowed
-  return res.status(405).json({ message: "Only POST and GET allowed" });
+  // ✅ Other methods not allowed
+  return res.status(405).json({ message: "Only GET, POST, OPTIONS allowed" });
 }
