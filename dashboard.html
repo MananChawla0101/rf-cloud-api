@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>📡 RF Cloud Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 40px;
+    }
+
+    .dashboard {
+      width: 400px;
+      max-width: 90%;
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(20px);
+      border-radius: 24px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      padding: 24px;
+      animation: fadeIn 1s ease;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 24px;
+      color: #38bdf8;
+      margin-bottom: 24px;
+      letter-spacing: 0.5px;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.07);
+      border-radius: 20px;
+      padding: 16px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    }
+
+    .label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      font-weight: 500;
+      color: #94a3b8;
+    }
+
+    .indicator {
+      height: 10px;
+      border-radius: 6px;
+      background: linear-gradient(to right, #22d3ee, #3b82f6);
+      width: 100%;
+      margin-top: 6px;
+    }
+
+    .status {
+      text-align: center;
+      font-size: 16px;
+      font-weight: 500;
+      color: #cbd5e1;
+      margin-top: 12px;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="dashboard">
+    <h1>📡 RF Cloud Dashboard</h1>
+
+    <!-- Signal Chart -->
+    <div class="card">
+      <div class="label">
+        <span>Signal Strength</span>
+        <span id="signalValue">-- dBm</span>
+      </div>
+      <canvas id="signalChart" height="180"></canvas>
+    </div>
+
+    <!-- Frequency Trend -->
+    <div class="card">
+      <div class="label">
+        <span>Frequency Trend</span>
+      </div>
+      <canvas id="freqChart" height="180"></canvas>
+    </div>
+
+    <!-- Status -->
+    <div class="card">
+      <div class="label">Status</div>
+      <div class="status" id="statusText">Awaiting data...</div>
+      <div class="indicator" id="statusBar"></div>
+    </div>
+  </div>
+
+  <script>
+    const apiUrl = "https://rf-cloud-api.vercel.app/api/getRF";
+
+    const signalCtx = document.getElementById("signalChart").getContext("2d");
+    const freqCtx = document.getElementById("freqChart").getContext("2d");
+
+    const signalChart = new Chart(signalCtx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Signal (dBm)",
+            data: [],
+            borderColor: "#38bdf8",
+            backgroundColor: "rgba(56,189,248,0.2)",
+            fill: true,
+            tension: 0.4,
+          },
+        ],
+      },
+      options: { scales: { y: { beginAtZero: false } }, plugins: { legend: { display: false } } },
+    });
+
+    const freqChart = new Chart(freqCtx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Frequency (MHz)",
+            data: [],
+            borderColor: "#4ade80",
+            backgroundColor: "rgba(74,222,128,0.2)",
+            fill: true,
+            tension: 0.4,
+          },
+        ],
+      },
+      options: { scales: { y: { beginAtZero: false } }, plugins: { legend: { display: false } } },
+    });
+
+    async function fetchData() {
+      try {
+        const res = await fetch(apiUrl);
+        const json = await res.json();
+
+        if (json.success && json.data.length > 0) {
+          const recent = json.data.slice(-15);
+          const times = recent.map((d) => new Date(d.timestamp).toLocaleTimeString());
+
+          signalChart.data.labels = times;
+          signalChart.data.datasets[0].data = recent.map((d) => d.signalStrength);
+          signalChart.update();
+
+          freqChart.data.labels = times;
+          freqChart.data.datasets[0].data = recent.map((d) => (d.frequency / 1e6).toFixed(2));
+          freqChart.update();
+
+          const latest = recent[recent.length - 1];
+          document.getElementById("signalValue").innerText = `${latest.signalStrength.toFixed(2)} dBm`;
+          document.getElementById("statusText").innerText =
+            `Last reading: ${latest.classification} • ${(latest.frequency / 1e6).toFixed(2)} MHz`;
+
+          const bar = document.getElementById("statusBar");
+          if (latest.classification.toLowerCase().includes("strong")) {
+            bar.style.background = "linear-gradient(to right, #22c55e, #16a34a)";
+          } else if (latest.classification.toLowerCase().includes("weak")) {
+            bar.style.background = "linear-gradient(to right, #facc15, #f97316)";
+          } else {
+            bar.style.background = "linear-gradient(to right, #3b82f6, #38bdf8)";
+          }
+        }
+      } catch (e) {
+        console.error("Fetch error", e);
+      }
+    }
+
+    fetchData();
+    setInterval(fetchData, 4000);
+  </script>
+</body>
+</html>
