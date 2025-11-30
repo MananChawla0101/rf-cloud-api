@@ -4,19 +4,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// --------- DB CONNECTION (REUSE) ----------
+// Connection reuse for serverless (avoid reconnecting on each call)
 let isConnected = false;
-
 async function connectToDB() {
   if (isConnected) return;
-
   if (!process.env.MONGO_URI) {
     throw new Error('MONGO_URI environment variable not set');
   }
-
   try {
     await mongoose.connect(process.env.MONGO_URI, {
-      // basic recommended options
+      // minimal recommended options
       useNewUrlParser: true,
       useUnifiedTopology: true,
       serverSelectionTimeoutMS: 5000,
@@ -29,7 +26,7 @@ async function connectToDB() {
   }
 }
 
-// --------- SCHEMA + MODEL ----------
+// Schema
 const rfSchema = new mongoose.Schema(
   {
     frequency_hz: { type: Number, required: true },
@@ -43,7 +40,7 @@ const rfSchema = new mongoose.Schema(
 const RFReading =
   mongoose.models.RFReading || mongoose.model('RFReading', rfSchema);
 
-// Normalize doc -> plain JSON for client
+// Helper: normalize a document for client (timestamp -> ms)
 function normalizeDoc(doc) {
   return {
     frequency_hz: doc.frequency_hz,
@@ -54,9 +51,33 @@ function normalizeDoc(doc) {
   };
 }
 
-// --------- API HANDLER ----------
+// Helper: safely get JSON body (handles string / undefined)
+async function getJsonBody(req) {
+  // If Vercel already parsed body
+  if (req.body) {
+    if (typeof req.body === 'string') {
+      // parse string
+      return JSON.parse(req.body);
+    }
+    return req.body;
+  }
+
+  // Fallback: read raw stream (older runtimes)
+  const raw = await new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+    });
+    req.on('end', () => resolve(data));
+    req.on('error', (err) => reject(err));
+  });
+
+  if (!raw) return {};
+  return JSON.parse(raw);
+}
+
 export default async function handler(req, res) {
-  // CORS
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -65,61 +86,46 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Ensure DB
   try {
     await connectToDB();
   } catch (err) {
     return res
       .status(500)
-      .json({ success: false, message: 'Database connection failed' });
+      .json({ success: false, message: 'Database connection failed', error: err.message });
   }
 
-  // ---------- POST: SAVE READING ----------
+  // POST -> Save a reading
   if (req.method === 'POST') {
     try {
-      let body = req.body;
-
-      // On Vercel, if Content-Type is application/json,
-      // req.body is already an object.
-      // But just in case it's a string, try to parse it.
-      if (typeof body === 'string') {
-        try {
-          body = JSON.parse(body);
-        } catch (e) {
-          console.error('❌ Could not parse JSON body:', body);
-          return res
-            .status(400)
-            .json({ success: false, message: 'Body is not valid JSON' });
-        }
-      }
-
-      if (!body || typeof body !== 'object') {
+      let body;
+      try {
+        body = await getJsonBody(req);
+      } catch (parseErr) {
+        console.error('❌ JSON parse error:', parseErr);
         return res
           .status(400)
-          .json({ success: false, message: 'Request body must be JSON' });
+          .json({ success: false, message: 'Invalid JSON', error: parseErr.message });
       }
 
       // Accept multiple possible field names
-      const rawFreq = body.frequency_hz ?? body.frequency ?? body.freq_hz;
-      const rawSig =
-        body.signal_dbm ?? body.signalStrength ?? body.signal ?? body.s;
-      const rawCls = body.classification ?? 'UNKNOWN';
-      const rawTs = body.timestamp;
-
-      const frequency_hz = Number(rawFreq);
-      const signal_dbm = Number(rawSig);
-      const classification = String(rawCls);
-
-      const timestampMs =
-        rawTs !== undefined ? Number(rawTs) : Date.now();
-      const timestamp = new Date(
-        Number.isFinite(timestampMs) ? timestampMs : Date.now()
+      const frequency_hz = Number(
+        body.frequency_hz ?? body.frequency ?? body.freq_hz
       );
+      const signal_dbm = Number(
+        body.signal_dbm ??
+          body.signalStrength ??
+          body.signal ??
+          body.s
+      );
+      const classification = (body.classification ?? 'UNKNOWN').toString();
+      const timestampMs = body.timestamp ? Number(body.timestamp) : Date.now();
+      const timestamp = new Date(timestampMs);
 
-      if (!Number.isFinite(frequency_hz) || !Number.isFinite(signal_dbm)) {
+      if (!isFinite(frequency_hz) || !isFinite(signal_dbm)) {
         return res.status(400).json({
           success: false,
           message: 'Invalid numeric fields (frequency_hz, signal_dbm)',
+          body,
         });
       }
 
@@ -129,7 +135,6 @@ export default async function handler(req, res) {
         classification,
         timestamp,
       });
-
       await doc.save();
 
       return res
@@ -137,35 +142,32 @@ export default async function handler(req, res) {
         .json({ success: true, message: 'Saved', data: normalizeDoc(doc) });
     } catch (err) {
       console.error('❌ POST save error:', err);
-      return res
-        .status(500)
-        .json({ success: false, message: 'Save failed' });
+      return res.status(500).json({
+        success: false,
+        message: 'Save failed',
+        error: err.message,
+      });
     }
   }
 
-  // ---------- GET: FETCH READINGS ----------
+  // GET -> Fetch readings (with optional from/to/limit/sort)
   if (req.method === 'GET') {
     try {
       const q = req.query || {};
-
       const fromMs = q.from ? Number(q.from) : null;
       const toMs = q.to ? Number(q.to) : null;
       const limit = Math.min(
         5000,
         Math.max(1, Number(q.limit || 1000))
       );
-      const sortParam = String(q.sort ?? 'asc').toLowerCase();
+      const sortParam = (q.sort ?? 'asc').toString().toLowerCase();
       const sort = sortParam === 'desc' ? { timestamp: -1 } : { timestamp: 1 };
 
       const filter = {};
       if (fromMs || toMs) {
         filter.timestamp = {};
-        if (fromMs && Number.isFinite(fromMs)) {
-          filter.timestamp.$gte = new Date(fromMs);
-        }
-        if (toMs && Number.isFinite(toMs)) {
-          filter.timestamp.$lte = new Date(toMs);
-        }
+        if (fromMs && isFinite(fromMs)) filter.timestamp.$gte = new Date(fromMs);
+        if (toMs && isFinite(toMs)) filter.timestamp.$lte = new Date(toMs);
       }
 
       const docs = await RFReading.find(filter)
@@ -180,11 +182,11 @@ export default async function handler(req, res) {
       console.error('❌ GET fetch error:', err);
       return res
         .status(500)
-        .json({ success: false, message: 'Fetch failed' });
+        .json({ success: false, message: 'Fetch failed', error: err.message });
     }
   }
 
-  // Other methods not allowed
+  // other methods not allowed
   return res
     .status(405)
     .json({ success: false, message: 'Only GET, POST, OPTIONS allowed' });
